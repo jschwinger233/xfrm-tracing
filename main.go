@@ -51,7 +51,7 @@ func main() {
 		case tcMsg := <-tcCh:
 			fmt.Printf("tc: %s\n", tcMsg)
 		case xfrmMsg := <-xfrmCh:
-			fmt.Printf("xfrm: \n%s\n", xfrmMsg)
+			fmt.Printf("xfrm: %s\n", xfrmMsg)
 		case pwruMsg := <-pwruCh:
 			fmt.Printf("pwru: \n%s\n", pwruMsg)
 		case <-ctx.Done():

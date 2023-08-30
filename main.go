@@ -24,6 +24,10 @@ var (
 )
 
 func main() {
+	if len(os.Args) >= 2 {
+		pcapFilter = os.Args[1]
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -47,9 +51,9 @@ func main() {
 		case tcMsg := <-tcCh:
 			fmt.Printf("tc: %s\n", tcMsg)
 		case xfrmMsg := <-xfrmCh:
-			fmt.Printf("xfrm: %s\n", xfrmMsg)
+			fmt.Printf("xfrm: \n%s\n", xfrmMsg)
 		case pwruMsg := <-pwruCh:
-			fmt.Printf("pwru: %s\n", pwruMsg)
+			fmt.Printf("pwru: \n%s\n", pwruMsg)
 		case <-ctx.Done():
 			return
 		}

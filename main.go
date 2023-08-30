@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
@@ -17,6 +18,9 @@ import (
 
 var (
 	pcapFilter string
+
+	pwruBuf     = make(map[string][]string)
+	skbConsumed = make(map[string]bool)
 )
 
 func main() {
@@ -99,9 +103,32 @@ func watchPwru(ctx context.Context) (<-chan string, context.Context, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return watch(ctx, []string{"pwru", "--filter-track-skb", "--output-meta", "--output-tuple", "--filter-netns", strconv.FormatUint(nsID, 10), pcapFilter},
+	ns := strconv.FormatUint(nsID, 10)
+	return watch(ctx, []string{"pwru", "--filter-track-skb", "--output-meta", "--output-tuple", "--filter-netns", ns, pcapFilter},
 		func(line string) (string, bool) {
-			return line, true
+			parts := strings.Split(line, " ")
+			skb := parts[0]
+			skbNs := ""
+			for _, part := range parts {
+				if strings.HasPrefix(part, "netns=") {
+					skbNs = strings.TrimPrefix(part, "netns=")
+				}
+			}
+
+			pwruBuf[skb] = append(pwruBuf[skb], line)
+
+			if strings.Contains(line, "kfree_skbmem") {
+				defer delete(skbConsumed, skb)
+				defer delete(pwruBuf, skb)
+				if !skbConsumed[skb] && skbNs == ns {
+					return strings.Join(pwruBuf[skb], "\n"), true
+				}
+			}
+
+			if strings.Contains(line, "consume_skb") {
+				skbConsumed[skb] = true
+			}
+			return "", false
 		})
 }
 

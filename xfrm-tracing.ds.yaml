@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: xfrm-tracing
+spec:
+  selector:
+    matchLabels:
+      name: xfrm-tracing
+  template:
+    metadata:
+      labels:
+        name: xfrm-tracing
+    spec:
+      containers:
+      - image: uumg/xfrm-tracing:latest
+        name: xfrm-tracing
+        volumeMounts:
+        - mountPath: /sys/kernel/debug
+          name: sys-kernel-debug
+        securityContext:
+          privileged: true
+        command: ["/usr/bin/xfrm-tracing"]
+        args: ["esp or (tcp and dst port 8000)"] # depends
+      volumes:
+      - name: sys-kernel-debug
+        hostPath:
+          path: /sys/kernel/debug
+          type: DirectoryOrCreate
+      hostNetwork: true
+      hostPID: true

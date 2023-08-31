@@ -25,6 +25,26 @@ var (
 	skbConsumed = make(map[string]bool)
 )
 
+func init() {
+	policy, err := exec.Command("ip", "xfrm", "policy").Output()
+	if err != nil {
+		log.Fatalf("Failed to get xfrm policy: %+v", err)
+	}
+	fmt.Printf("xfrm policy:\n%s\n", string(policy))
+
+	sa, err := exec.Command("ip", "xfrm", "state").Output()
+	if err != nil {
+		log.Fatalf("Failed to get xfrm state: %+v", err)
+	}
+	fmt.Printf("xfrm state:\n%s\n", string(sa))
+
+	stat, err := os.ReadFile("/proc/net/xfrm_stat")
+	if err != nil {
+		log.Fatalf("Failed to get xfrm stat: %+v", err)
+	}
+	fmt.Printf("xfrm stat:\n%s\n", string(stat))
+}
+
 func main() {
 	if len(os.Args) >= 2 {
 		pcapFilter = os.Args[1]
@@ -196,10 +216,3 @@ func watchXfrmStat(ctx context.Context) (<-chan string, context.Context, error) 
 	}()
 	return ch, retCtx, nil
 }
-
-/*
-TODO:
-1. xfrm error per second, print diff only
-2. print xfrm s/p in the beginning
-3. timestamp?
-*/

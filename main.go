@@ -198,7 +198,7 @@ func watchXfrmStat(ctx context.Context) (<-chan string, context.Context, error) 
 				}
 				scanner := bufio.NewScanner(file)
 				for scanner.Scan() {
-					parts := strings.Split(scanner.Text(), " ")
+					parts := strings.Fields(scanner.Text())
 					last, ok := xfrmStats[parts[0]]
 					if !ok {
 						xfrmStats[parts[0]] = parts[1]

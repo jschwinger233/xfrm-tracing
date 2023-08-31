@@ -148,13 +148,16 @@ func watchPwru(ctx context.Context) (<-chan string, context.Context, error) {
 					skbNs = strings.TrimPrefix(part, "netns=")
 				}
 			}
+			if skbNs != ns {
+				return "", false
+			}
 
 			pwruBuf[skb] = append(pwruBuf[skb], line)
 
 			if strings.Contains(line, "kfree_skbmem") {
 				defer delete(skbConsumed, skb)
 				defer delete(pwruBuf, skb)
-				if !skbConsumed[skb] && skbNs == ns {
+				if !skbConsumed[skb] {
 					return strings.Join(pwruBuf[skb], "\n"), true
 				}
 			}

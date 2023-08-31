@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
@@ -46,6 +47,12 @@ func main() {
 		log.Fatalf("Failed to watch pwru: %+v", err)
 	}
 
+	xfrmStatCh, ctx, err := watchXfrmStat(ctx)
+	if err != nil {
+		log.Fatalf("Failed to watch xfrm_stat: %+v", err)
+	}
+
+	fmt.Println("Tracing...")
 	for {
 		select {
 		case tcMsg := <-tcCh:
@@ -54,6 +61,8 @@ func main() {
 			fmt.Printf("xfrm: %s\n", xfrmMsg)
 		case pwruMsg := <-pwruCh:
 			fmt.Printf("pwru: \n%s\n", pwruMsg)
+		case xfrmStatMsg := <-xfrmStatCh:
+			fmt.Printf("xfrm_stat: %s\n", xfrmStatMsg)
 		case <-ctx.Done():
 			return
 		}
@@ -150,3 +159,46 @@ func currentNetns() (uint64, error) {
 	}
 	return s.Ino, nil
 }
+
+func watchXfrmStat(ctx context.Context) (<-chan string, context.Context, error) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	retCtx, cancel := context.WithCancel(context.Background())
+	ch := make(chan string)
+	go func() {
+		defer cancel()
+		xfrmStats := make(map[string]string)
+		for {
+			select {
+			case <-ticker.C:
+				file, err := os.Open("/proc/net/xfrm_stat")
+				if err != nil {
+					fmt.Printf("Failed to read xfrm_stat: %+v\n", err)
+					continue
+				}
+				scanner := bufio.NewScanner(file)
+				for scanner.Scan() {
+					parts := strings.Split(scanner.Text(), " ")
+					last, ok := xfrmStats[parts[0]]
+					if !ok {
+						xfrmStats[parts[0]] = parts[1]
+						continue
+					}
+					if last != parts[1] {
+						ch <- fmt.Sprintf("%s: %s -> %s", parts[0], last, parts[1])
+						xfrmStats[parts[0]] = parts[1]
+					}
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, retCtx, nil
+}
+
+/*
+TODO:
+1. xfrm error per second, print diff only
+2. print xfrm s/p in the beginning
+3. timestamp?
+*/

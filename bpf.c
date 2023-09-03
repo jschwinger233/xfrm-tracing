@@ -39,6 +39,7 @@ struct event {
 	__u64 pc;
 	__u64 skb;
 	__u32 mark;
+	__u32 ifindex;
 	__u8 payload[256];
 };
 
@@ -162,6 +163,7 @@ int kprobe_xfrm_inc_stats(struct pt_regs *ctx)
 	ev.pc = ctx->ip - 1;
 	ev.skb = (__u64)skb;
 	ev.mark = BPF_CORE_READ(*skb, mark);
+	ev.ifindex = BPF_CORE_READ(*skb, dev, ifindex);
 	void *skb_head = BPF_CORE_READ(*skb, head);
 	u16 l3_off = BPF_CORE_READ(*skb, network_header);
 	bpf_probe_read_kernel(&ev.payload, sizeof(ev.payload), (void *)(skb_head + l3_off));

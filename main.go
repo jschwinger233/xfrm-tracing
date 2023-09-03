@@ -181,9 +181,10 @@ func main() {
 		if !ok {
 			log.Printf("Failed to find xfrm_inc_stats context for address: %x\n", event.Pc)
 		}
-		fmt.Printf("xfrm_inc_stats[%d]++: mark=%d %s\n",
+		fmt.Printf("xfrm_inc_stats[%d]++: mark=%d if=%d %s\n",
 			xCtx.XfrmStatIndex,
 			event.Mark,
+			event.Ifindex,
 			sprintfPacket(event.Payload[:]))
 	}
 

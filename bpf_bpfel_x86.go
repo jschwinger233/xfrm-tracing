@@ -16,8 +16,8 @@ type bpfEvent struct {
 	Pc      uint64
 	Skb     uint64
 	Mark    uint32
+	Ifindex uint32
 	Payload [256]uint8
-	_       [4]byte
 }
 
 // loadBpf returns the embedded CollectionSpec for bpf.

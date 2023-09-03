@@ -15,15 +15,6 @@ struct config {
 
 static volatile const struct config CONFIG = {};
 
-#define OFF_XFRM_MIB (offsetof(struct net, mib) + offsetof(struct netns_mib, xfrm_statistics))
-
-struct bpf_map_def SEC("maps") saved_xfrm_mib = {
-	.type = BPF_MAP_TYPE_PERCPU_ARRAY,
-	.key_size = sizeof(int),
-	.value_size = sizeof(__u64),
-	.max_entries = 29,
-};
-
 struct inc_ctx {
 	__u8 register_idx;
 };
@@ -183,41 +174,3 @@ int kprobe_xfrm_statistics_seq_show(struct pt_regs *ctx)
 	bpf_perf_event_output(ctx, &perf_output, BPF_F_CURRENT_CPU, &xfrm_statistics, sizeof(xfrm_statistics));
 	return 0;
 }
-
-SEC("kprobe/kfree_skbmem")
-int kprobe_kfree_skbmem(struct pt_regs *ctx)
-{
-	struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-	struct net *net = BPF_CORE_READ(skb, dev, nd_net.net);
-	__u64 _mib = (__u64)BPF_CORE_READ(skb, dev, nd_net.net, mib.xfrm_statistics);
-	//__u64 _mib;
-	//bpf_probe_read_kernel(&_mib, sizeof(_mib), (void *)net+0x1a8);
-
-
-
-	struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-	__u64 fsbase = BPF_CORE_READ(task, thread.fsbase);
-	__u64 gsbase = BPF_CORE_READ(task, thread.gsbase);
-	if (_mib != 0)
-		bpf_printk("%llx, mib = %llx, gsbase = %llx\n", OFF_XFRM_MIB, _mib, fsbase);
-	struct linux_xfrm_mib *mib = (struct linux_xfrm_mib *)(gsbase + _mib);
-
-	__u64 xfrm_stat;
-	for (int idx=1; idx<29; idx++) {
-		bpf_probe_read_kernel(&xfrm_stat, sizeof(xfrm_stat), &mib->mibs[idx]);
-
-		int i = idx;
-		__u64 *orig_xfrm_stat = (__u64 *)bpf_map_lookup_elem(&saved_xfrm_mib, &i);
-		if (!orig_xfrm_stat)
-			continue;
-
-		//bpf_printk("xfrm_stat[%d] = %d(+%d)\n", OFF_XFRM_MIB, xfrm_stat, xfrm_stat - *orig_xfrm_stat);
-		if (xfrm_stat > 0) {
-			bpf_printk("xfrm_stat[%d] = %llu(+%d)\n", idx, xfrm_stat, xfrm_stat - *orig_xfrm_stat);
-			i = idx;
-			bpf_map_update_elem(&saved_xfrm_mib, &i, &xfrm_stat, BPF_ANY);
-		}
-	}
-	return 0;
-}
-

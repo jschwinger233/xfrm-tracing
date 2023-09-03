@@ -1,21 +1,19 @@
 package main
 
 import (
-	"bufio"
-	"context"
+	"bytes"
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
-	"runtime"
-	"strconv"
-	"strings"
-	"syscall"
-	"time"
 
-	"github.com/vishvananda/netns"
-	"golang.org/x/sys/unix"
+	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/perf"
+	"gopkg.in/yaml.v2"
 )
 
 var (
@@ -25,197 +23,141 @@ var (
 	skbConsumed = make(map[string]bool)
 )
 
-func init() {
-	policy, err := exec.Command("ip", "xfrm", "policy").Output()
-	if err != nil {
-		log.Fatalf("Failed to get xfrm policy: %+v", err)
-	}
-	fmt.Printf("xfrm policy:\n%s\n", string(policy))
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -no-strip -target native bpf bpf.c -- -I./headers
 
-	sa, err := exec.Command("ip", "xfrm", "state").Output()
-	if err != nil {
-		log.Fatalf("Failed to get xfrm state: %+v", err)
-	}
-	fmt.Printf("xfrm state:\n%s\n", string(sa))
-
-	stat, err := os.ReadFile("/proc/net/xfrm_stat")
-	if err != nil {
-		log.Fatalf("Failed to get xfrm stat: %+v", err)
-	}
-	fmt.Printf("xfrm stat:\n%s\n", string(stat))
+type XfrmIncContext struct {
+	Address       uint64 `yaml:"address"`
+	Register      string `yaml:"register"`
+	XfrmStatIndex uint8  `yaml:"xfrm_stat_index"`
 }
 
 func main() {
-	if len(os.Args) >= 2 {
-		pcapFilter = os.Args[1]
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	tcCh, ctx, err := watchTc(ctx)
-	if err != nil {
-		log.Fatalf("Failed to watch tc: %+v", err)
-	}
-
-	xfrmCh, ctx, err := watchXfrm(ctx)
-	if err != nil {
-		log.Fatalf("Failed to watch xfrm: %+v", err)
-	}
-
-	pwruCh, ctx, err := watchPwru(ctx)
-	if err != nil {
-		log.Fatalf("Failed to watch pwru: %+v", err)
-	}
-
-	xfrmStatCh, ctx, err := watchXfrmStat(ctx)
-	if err != nil {
-		log.Fatalf("Failed to watch xfrm_stat: %+v", err)
-	}
-
-	fmt.Println("Tracing...")
-	for {
-		select {
-		case tcMsg := <-tcCh:
-			fmt.Printf("tc: %s\n", tcMsg)
-		case xfrmMsg := <-xfrmCh:
-			fmt.Printf("xfrm: %s\n", xfrmMsg)
-		case pwruMsg := <-pwruCh:
-			fmt.Printf("pwru: \n%s\n", pwruMsg)
-		case xfrmStatMsg := <-xfrmStatCh:
-			fmt.Printf("xfrm_stat: %s\n", xfrmStatMsg)
-		case <-ctx.Done():
-			return
+	objs := bpfObjects{}
+	var opts ebpf.CollectionOptions
+	opts.Programs.LogLevel = ebpf.LogLevelInstruction
+	opts.Programs.LogSize = ebpf.DefaultVerifierLogSize * 100
+	if err := loadBpfObjects(&objs, &opts); err != nil {
+		var (
+			ve          *ebpf.VerifierError
+			verifierLog string
+		)
+		if errors.As(err, &ve) {
+			verifierLog = fmt.Sprintf("Verifier error: %+v\n", ve)
 		}
-	}
-}
 
-func watch(ctx context.Context, cmd []string, lineHandle func(string) (string, bool)) (<-chan string, context.Context, error) {
-	command := exec.CommandContext(ctx, cmd[0], cmd[1:]...)
-	stdout, err := command.StdoutPipe()
+		log.Fatalf("Failed to load objects: %s\n%+v", verifierLog, err)
+
+	}
+	defer objs.Close()
+
+	// Get net->mib.xfrm_statistics
+	kp, err := link.Kprobe("xfrm_statistics_seq_show", objs.KprobeXfrmStatisticsSeqShow, nil)
 	if err != nil {
-		return nil, nil, err
+		log.Fatalf("Failed to attach xfrm_statistics_seq_show: %s\n", err)
 	}
-	if err := command.Start(); err != nil {
-		return nil, nil, err
-	}
-
-	ch := make(chan string)
-	retCtx, cancel := context.WithCancel(context.Background())
+	triggerXfrmStatisticsSeqShow := make(chan struct{})
 	go func() {
-		defer cancel()
-		//defer close(ch)
-		defer command.Wait()
-		scanner := bufio.NewScanner(stdout)
-		for scanner.Scan() {
-			line, ok := lineHandle(scanner.Text())
-			if ok {
-				ch <- line
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			log.Printf("Scan error: %+v", err)
-		}
+		<-triggerXfrmStatisticsSeqShow
+		ioutil.ReadFile("/proc/net/xfrm_stat")
 	}()
-	return ch, retCtx, nil
-}
-
-func watchTc(ctx context.Context) (<-chan string, context.Context, error) {
-	return watch(ctx, []string{"tc", "monitor"}, func(line string) (string, bool) {
-		return line, true
-	})
-}
-
-func watchXfrm(ctx context.Context) (<-chan string, context.Context, error) {
-	return watch(ctx, []string{"ip", "xfrm", "monitor", "SA", "policy"}, func(line string) (string, bool) {
-		return line, true
-	})
-}
-
-func watchPwru(ctx context.Context) (<-chan string, context.Context, error) {
-	nsID, err := currentNetns()
+	perfReader, err := perf.NewReader(objs.PerfOutput, 4096)
 	if err != nil {
-		return nil, nil, err
+		log.Fatalf("Failed to create perf event reader: %s\n", err)
 	}
-	ns := strconv.FormatUint(nsID, 10)
-	return watch(ctx, []string{"pwru", "--filter-track-skb", "--output-meta", "--output-tuple", "--filter-netns", ns, pcapFilter},
-		func(line string) (string, bool) {
-			parts := strings.Split(line, " ")
-			skb := parts[0]
-			skbNs := ""
-			for _, part := range parts {
-				if strings.HasPrefix(part, "netns=") {
-					skbNs = strings.TrimPrefix(part, "netns=")
-				}
-			}
-			if skbNs != ns {
-				return "", false
-			}
-
-			pwruBuf[skb] = append(pwruBuf[skb], line)
-
-			if strings.Contains(line, "kfree_skbmem") {
-				defer delete(skbConsumed, skb)
-				defer delete(pwruBuf, skb)
-				if !skbConsumed[skb] {
-					return strings.Join(pwruBuf[skb], "\n"), true
-				}
-			}
-
-			if strings.Contains(line, "consume_skb") {
-				skbConsumed[skb] = true
-			}
-			return "", false
-		})
-}
-
-func currentNetns() (uint64, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	ns, err := netns.Get()
+	close(triggerXfrmStatisticsSeqShow)
+	record, err := perfReader.Read()
 	if err != nil {
-		return 0, err
+		log.Fatalf("Failed to read perf event: %s\n", err)
 	}
-	defer ns.Close()
-	var s unix.Stat_t
-	if err := unix.Fstat(int(ns), &s); err != nil {
-		return 0, err
+	var xfrmStatistics uint64
+	if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &xfrmStatistics); err != nil {
+		log.Fatalf("Failed to parse perf event: %s\n", err)
 	}
-	return s.Ino, nil
-}
+	fmt.Printf("xfrmStatistics: %x\n", xfrmStatistics)
+	kp.Close()
 
-func watchXfrmStat(ctx context.Context) (<-chan string, context.Context, error) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	retCtx, cancel := context.WithCancel(context.Background())
-	ch := make(chan string)
-	go func() {
-		defer cancel()
-		xfrmStats := make(map[string]string)
-		for {
-			select {
-			case <-ticker.C:
-				file, err := os.Open("/proc/net/xfrm_stat")
-				if err != nil {
-					fmt.Printf("Failed to read xfrm_stat: %+v\n", err)
-					continue
-				}
-				scanner := bufio.NewScanner(file)
-				for scanner.Scan() {
-					parts := strings.Fields(scanner.Text())
-					last, ok := xfrmStats[parts[0]]
-					if !ok {
-						xfrmStats[parts[0]] = parts[1]
-						continue
-					}
-					if last != parts[1] {
-						ch <- fmt.Sprintf("%s: %s -> %s", parts[0], last, parts[1])
-						xfrmStats[parts[0]] = parts[1]
-					}
-				}
-			case <-ctx.Done():
-				return
-			}
+	_s := make(chan os.Signal, 1)
+	signal.Notify(_s, os.Interrupt, os.Kill)
+	<-_s
+
+	return
+
+	fileContent, err := ioutil.ReadFile("xfrm_inc_kprobe.yaml")
+	if err != nil {
+		log.Fatalf("Failed to read file: %s\n", err)
+	}
+
+	xfrmIncCtx := []XfrmIncContext{}
+	if err := yaml.Unmarshal(fileContent, &objs.SavedXfrmMib); err != nil {
+		log.Fatalf("Failed to unmarshal yaml: %s\n", err)
+	}
+
+	for _, ctx := range xfrmIncCtx {
+		objs.IncContext.Put(ctx.Address, idxOfPtRegs(ctx.Register))
+		ksym, offset := addr2ksym(ctx.Address)
+		kp, err := link.Kprobe(ksym, objs.KprobeXfrmIncStats, &link.KprobeOptions{Offset: offset})
+		if err != nil {
+			log.Fatalf("Failed to attach %s: %s\n", ksym, err)
 		}
-	}()
-	return ch, retCtx, nil
+		defer kp.Close()
+	}
+
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, os.Kill)
+	println("tracing...")
+	<-sigs
+}
+
+func idxOfPtRegs(reg string) uint8 {
+	switch reg {
+	case "r15":
+		return 0
+	case "r14":
+		return 1
+	case "r13":
+		return 2
+	case "r12":
+		return 3
+	case "rbp":
+		return 4
+	case "rbx":
+		return 5
+	case "r11":
+		return 6
+	case "r10":
+		return 7
+	case "r9":
+		return 8
+	case "r8":
+		return 9
+	case "rax":
+		return 10
+	case "rcx":
+		return 11
+	case "rdx":
+		return 12
+	case "rsi":
+		return 13
+	case "rdi":
+		return 14
+	case "orig_rax":
+		return 15
+	case "rip":
+		return 16
+	case "cs":
+		return 17
+	case "eflags":
+		return 18
+	case "rsp":
+		return 19
+	case "ss":
+		return 20
+	}
+	log.Fatalf("Unknown register: %s\n", reg)
+	return 0
+}
+
+func addr2ksym(addr uint64) (ksym string, offset uint64) {
+	sym := NearestSymbol(addr)
+	return sym.Name, addr - sym.Addr
 }

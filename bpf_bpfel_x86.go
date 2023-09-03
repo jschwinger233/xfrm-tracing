@@ -12,6 +12,8 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+type bpfEvent struct{ Pc uint64 }
+
 // loadBpf returns the embedded CollectionSpec for bpf.
 func loadBpf() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_BpfBytes)
@@ -62,6 +64,7 @@ type bpfProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
+	Events       *ebpf.MapSpec `ebpf:"events"`
 	IncContext   *ebpf.MapSpec `ebpf:"inc_context"`
 	PerfOutput   *ebpf.MapSpec `ebpf:"perf_output"`
 	SavedXfrmMib *ebpf.MapSpec `ebpf:"saved_xfrm_mib"`
@@ -86,6 +89,7 @@ func (o *bpfObjects) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
+	Events       *ebpf.Map `ebpf:"events"`
 	IncContext   *ebpf.Map `ebpf:"inc_context"`
 	PerfOutput   *ebpf.Map `ebpf:"perf_output"`
 	SavedXfrmMib *ebpf.Map `ebpf:"saved_xfrm_mib"`
@@ -93,6 +97,7 @@ type bpfMaps struct {
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
+		m.Events,
 		m.IncContext,
 		m.PerfOutput,
 		m.SavedXfrmMib,

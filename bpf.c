@@ -7,6 +7,8 @@
 
 char __license[] SEC("license") = "Dual MIT/GPL";
 
+const struct event *_ __attribute__((unused));
+
 struct config {
 	__u64 xfrm_statistics;
 };
@@ -37,71 +39,80 @@ struct bpf_map_def SEC("maps") perf_output = {
 	.type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
 };
 
-static __always_inline void read_reg(struct pt_regs *ctx, __u8 reg_idx, __u64 reg)
+struct bpf_map_def SEC("maps") events = {
+	.type = BPF_MAP_TYPE_RINGBUF,
+	.max_entries = 1<<29,
+};
+
+struct event {
+	__u64 pc;
+};
+
+static __always_inline void read_reg(struct pt_regs *ctx, __u8 reg_idx, __u64 *reg)
 {
 	switch (reg_idx) {
 	case 0:
-		BPF_CORE_READ_INTO(&reg, ctx, r15);
+		BPF_CORE_READ_INTO(reg, ctx, r15);
 		break;
 	case 1:
-		BPF_CORE_READ_INTO(&reg, ctx, r14);
+		BPF_CORE_READ_INTO(reg, ctx, r14);
 		break;
 	case 2:
-		BPF_CORE_READ_INTO(&reg, ctx, r13);
+		BPF_CORE_READ_INTO(reg, ctx, r13);
 		break;
 	case 3:
-		BPF_CORE_READ_INTO(&reg, ctx, r12);
+		BPF_CORE_READ_INTO(reg, ctx, r12);
 		break;
 	case 4:
-		BPF_CORE_READ_INTO(&reg, ctx, bp);
+		BPF_CORE_READ_INTO(reg, ctx, bp);
 		break;
 	case 5:
-		BPF_CORE_READ_INTO(&reg, ctx, bx);
+		BPF_CORE_READ_INTO(reg, ctx, bx);
 		break;
 	case 6:
-		BPF_CORE_READ_INTO(&reg, ctx, r11);
+		BPF_CORE_READ_INTO(reg, ctx, r11);
 		break;
 	case 7:
-		BPF_CORE_READ_INTO(&reg, ctx, r10);
+		BPF_CORE_READ_INTO(reg, ctx, r10);
 		break;
 	case 8:
-		BPF_CORE_READ_INTO(&reg, ctx, r9);
+		BPF_CORE_READ_INTO(reg, ctx, r9);
 		break;
 	case 9:
-		BPF_CORE_READ_INTO(&reg, ctx, r8);
+		BPF_CORE_READ_INTO(reg, ctx, r8);
 		break;
 	case 10:
-		BPF_CORE_READ_INTO(&reg, ctx, ax);
+		BPF_CORE_READ_INTO(reg, ctx, ax);
 		break;
 	case 11:
-		BPF_CORE_READ_INTO(&reg, ctx, cx);
+		BPF_CORE_READ_INTO(reg, ctx, cx);
 		break;
 	case 12:
-		BPF_CORE_READ_INTO(&reg, ctx, dx);
+		BPF_CORE_READ_INTO(reg, ctx, dx);
 		break;
 	case 13:
-		BPF_CORE_READ_INTO(&reg, ctx, si);
+		BPF_CORE_READ_INTO(reg, ctx, si);
 		break;
 	case 14:
-		BPF_CORE_READ_INTO(&reg, ctx, di);
+		BPF_CORE_READ_INTO(reg, ctx, di);
 		break;
 	case 15:
-		BPF_CORE_READ_INTO(&reg, ctx, orig_ax);
+		BPF_CORE_READ_INTO(reg, ctx, orig_ax);
 		break;
 	case 16:
-		BPF_CORE_READ_INTO(&reg, ctx, ip);
+		BPF_CORE_READ_INTO(reg, ctx, ip);
 		break;
 	case 17:
-		BPF_CORE_READ_INTO(&reg, ctx, cs);
+		BPF_CORE_READ_INTO(reg, ctx, cs);
 		break;
 	case 18:
-		BPF_CORE_READ_INTO(&reg, ctx, flags);
+		BPF_CORE_READ_INTO(reg, ctx, flags);
 		break;
 	case 19:
-		BPF_CORE_READ_INTO(&reg, ctx, sp);
+		BPF_CORE_READ_INTO(reg, ctx, sp);
 		break;
 	case 20:
-		BPF_CORE_READ_INTO(&reg, ctx, ss);
+		BPF_CORE_READ_INTO(reg, ctx, ss);
 		break;
 	}
 }
@@ -116,13 +127,15 @@ int kprobe_xfrm_inc_stats(struct pt_regs *ctx)
 		return 0;
 	}
 
-	__u64 reg;
-	read_reg(ctx, inc_ctx->register_idx, reg);
+	__u64 reg = 1;
+	read_reg(ctx, inc_ctx->register_idx, &reg);
 	if (reg != CONFIG.xfrm_statistics) {
 		return 0;
 	}
 
-	bpf_printk("xfrm_inc_stats: %llx\n", ctx->ip);
+	struct event ev = {};
+	ev.pc = ctx->ip - 1;
+	bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 	return 0;
 }
 

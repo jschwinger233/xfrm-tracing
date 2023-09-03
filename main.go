@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -9,10 +10,12 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
+	"github.com/cilium/ebpf/ringbuf"
 	"gopkg.in/yaml.v2"
 )
 
@@ -23,7 +26,7 @@ var (
 	skbConsumed = make(map[string]bool)
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -no-strip -target native bpf bpf.c -- -I./headers
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -no-strip -target native -type event bpf bpf.c -- -I./headers
 
 type XfrmIncContext struct {
 	Address       uint64 `yaml:"address"`
@@ -32,11 +35,17 @@ type XfrmIncContext struct {
 }
 
 func main() {
-	objs := bpfObjects{}
+	spec, err := loadBpf()
+	if err != nil {
+		log.Fatalf("Failed to load BPF: %s\n", err)
+	}
+
+	// Load KprobeXfrmStatisticsSeqShow
 	var opts ebpf.CollectionOptions
 	opts.Programs.LogLevel = ebpf.LogLevelInstruction
 	opts.Programs.LogSize = ebpf.DefaultVerifierLogSize * 100
-	if err := loadBpfObjects(&objs, &opts); err != nil {
+	objs := bpfObjects{}
+	if err := spec.LoadAndAssign(&objs, &opts); err != nil {
 		var (
 			ve          *ebpf.VerifierError
 			verifierLog string
@@ -48,7 +57,6 @@ func main() {
 		log.Fatalf("Failed to load objects: %s\n%+v", verifierLog, err)
 
 	}
-	defer objs.Close()
 
 	// Get net->mib.xfrm_statistics
 	kp, err := link.Kprobe("xfrm_statistics_seq_show", objs.KprobeXfrmStatisticsSeqShow, nil)
@@ -75,37 +83,95 @@ func main() {
 	}
 	fmt.Printf("xfrmStatistics: %x\n", xfrmStatistics)
 	kp.Close()
+	objs.Close()
 
-	_s := make(chan os.Signal, 1)
-	signal.Notify(_s, os.Interrupt, os.Kill)
-	<-_s
+	// Rewrite config and reload
+	if err := spec.RewriteConstants(map[string]interface{}{
+		"CONFIG": struct {
+			XfrmStatistics uint64
+		}{
+			XfrmStatistics: xfrmStatistics,
+		},
+	}); err != nil {
+		log.Fatalf("Failed to rewrite constants: %s\n", err)
+	}
+	objs = bpfObjects{}
+	if err := spec.LoadAndAssign(&objs, &opts); err != nil {
+		var (
+			ve          *ebpf.VerifierError
+			verifierLog string
+		)
+		if errors.As(err, &ve) {
+			verifierLog = fmt.Sprintf("Verifier error: %+v\n", ve)
+		}
 
-	return
+		log.Fatalf("Failed to load objects: %s\n%+v", verifierLog, err)
 
-	fileContent, err := ioutil.ReadFile("xfrm_inc_kprobe.yaml")
+	}
+
+	// Attach kprobes
+	fileContent, err := ioutil.ReadFile(os.Args[1])
 	if err != nil {
 		log.Fatalf("Failed to read file: %s\n", err)
 	}
-
 	xfrmIncCtx := []XfrmIncContext{}
-	if err := yaml.Unmarshal(fileContent, &objs.SavedXfrmMib); err != nil {
+	xfrmIncMap := make(map[uint64]XfrmIncContext)
+	if err := yaml.Unmarshal(fileContent, &xfrmIncCtx); err != nil {
 		log.Fatalf("Failed to unmarshal yaml: %s\n", err)
 	}
-
-	for _, ctx := range xfrmIncCtx {
-		objs.IncContext.Put(ctx.Address, idxOfPtRegs(ctx.Register))
-		ksym, offset := addr2ksym(ctx.Address)
+	for _, xCtx := range xfrmIncCtx {
+		objs.IncContext.Put(xCtx.Address, idxOfPtRegs(xCtx.Register))
+		ksym, offset := addr2ksym(xCtx.Address)
 		kp, err := link.Kprobe(ksym, objs.KprobeXfrmIncStats, &link.KprobeOptions{Offset: offset})
 		if err != nil {
-			log.Fatalf("Failed to attach %s: %s\n", ksym, err)
+			fmt.Printf("Failed to attach %s: %s\n", ksym, err)
+			continue
 		}
 		defer kp.Close()
+
+		xfrmIncMap[xCtx.Address] = xCtx
 	}
 
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt, os.Kill)
+	// Poll ringbuf events
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
 	println("tracing...")
-	<-sigs
+
+	eventsReader, err := ringbuf.NewReader(objs.Events)
+	if err != nil {
+		log.Printf("Failed to open ringbuf: %+v", err)
+	}
+	defer eventsReader.Close()
+
+	go func() {
+		<-ctx.Done()
+		eventsReader.Close()
+	}()
+
+	for {
+		rec, err := eventsReader.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return
+			}
+			log.Printf("Failed to read ringbuf: %+v", err)
+			continue
+		}
+
+		var event bpfEvent
+		if err = binary.Read(bytes.NewBuffer(rec.RawSample), binary.LittleEndian, &event); err != nil {
+			log.Printf("Failed to parse ringbuf event: %+v", err)
+			continue
+		}
+
+		xCtx, ok := xfrmIncMap[event.Pc]
+		if !ok {
+			log.Printf("Failed to find xfrm_inc_stats context for address: %x\n", event.Pc)
+		}
+		fmt.Printf("xfrm_inc_stats: %+v\n", xCtx)
+	}
+
 }
 
 func idxOfPtRegs(reg string) uint8 {

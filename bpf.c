@@ -39,6 +39,7 @@ struct event {
 	__u64 pc;
 	__u64 skb;
 	__u32 mark;
+	__u8 payload[256];
 };
 
 struct bpf_map_def SEC("maps") tid2skb = {
@@ -151,7 +152,7 @@ int kprobe_xfrm_inc_stats(struct pt_regs *ctx)
 	}
 
 	__u32 tid = bpf_get_current_pid_tgid() & 0xffffffff;
-	struct sk_buff *skb = (struct sk_buff *)bpf_map_lookup_elem(&tid2skb, &tid);
+	struct sk_buff **skb = (struct sk_buff **)bpf_map_lookup_elem(&tid2skb, &tid);
 	if (!skb) {
 		bpf_printk("BUG: skb not found: %x\n", tid);
 		return 0;
@@ -160,7 +161,10 @@ int kprobe_xfrm_inc_stats(struct pt_regs *ctx)
 	struct event ev = {};
 	ev.pc = ctx->ip - 1;
 	ev.skb = (__u64)skb;
-	ev.mark = BPF_CORE_READ(skb, mark);
+	ev.mark = BPF_CORE_READ(*skb, mark);
+	void *skb_head = BPF_CORE_READ(*skb, head);
+	u16 l3_off = BPF_CORE_READ(*skb, network_header);
+	bpf_probe_read_kernel(&ev.payload, sizeof(ev.payload), (void *)(skb_head + l3_off));
 	bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 	return 0;
 }

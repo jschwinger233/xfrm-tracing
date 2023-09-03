@@ -132,6 +132,18 @@ func main() {
 		xfrmIncMap[xCtx.Address] = xCtx
 	}
 
+	// Attach ip_rcv
+	kp, err = link.Kprobe("ip_rcv", objs.KprobeIpRcv, nil)
+	if err != nil {
+		log.Fatalf("Failed to attach kprobe to ip_rcv: %s\n", err)
+	}
+	defer kp.Close()
+	krp, err := link.Kretprobe("ip_rcv", objs.KretprobeIpRcv, nil)
+	if err != nil {
+		log.Fatalf("Failed to attach kretprobe to ip_rcv: %s\n", err)
+	}
+	defer krp.Close()
+
 	// Poll ringbuf events
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -169,7 +181,7 @@ func main() {
 		if !ok {
 			log.Printf("Failed to find xfrm_inc_stats context for address: %x\n", event.Pc)
 		}
-		fmt.Printf("xfrm_inc_stats: %+v\n", xCtx)
+		fmt.Printf("xfrm_inc_stats[%d]++: %+v\n", xCtx.XfrmStatIndex, event)
 	}
 
 }

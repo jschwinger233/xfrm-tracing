@@ -46,6 +46,15 @@ struct bpf_map_def SEC("maps") events = {
 
 struct event {
 	__u64 pc;
+	__u64 skb;
+	__u32 mark;
+};
+
+struct bpf_map_def SEC("maps") tid2skb = {
+	.type = BPF_MAP_TYPE_HASH,
+	.key_size = sizeof(__u32),
+	.value_size = sizeof(struct sk_buff *),
+	.max_entries = 1<<16,
 };
 
 static __always_inline void read_reg(struct pt_regs *ctx, __u8 reg_idx, __u64 *reg)
@@ -117,13 +126,30 @@ static __always_inline void read_reg(struct pt_regs *ctx, __u8 reg_idx, __u64 *r
 	}
 }
 
+SEC("kprobe/ip_rcv")
+int kprobe_ip_rcv(struct pt_regs *ctx)
+{
+	__u64 skb = (__u64)PT_REGS_PARM1(ctx);
+	__u32 tid = bpf_get_current_pid_tgid() & 0xffffffff;
+	bpf_map_update_elem(&tid2skb, &tid, &skb, BPF_ANY);
+	return 0;
+}
+
+SEC("kretprobe/ip_rcv")
+int kretprobe_ip_rcv(struct pt_regs *ctx)
+{
+	__u32 tid = bpf_get_current_pid_tgid() & 0xffffffff;
+	bpf_map_delete_elem(&tid2skb, &tid);
+	return 0;
+}
+
 SEC("kprobe/xfrm_inc_stats")
 int kprobe_xfrm_inc_stats(struct pt_regs *ctx)
 {
 	__u64 pc = BPF_CORE_READ(ctx, ip)-1;
 	struct inc_ctx *inc_ctx = bpf_map_lookup_elem(&inc_context, &pc);
 	if (!inc_ctx) {
-		bpf_printk("pc not found: %llx\n", pc);
+		bpf_printk("BUG: pc not found: %llx\n", pc);
 		return 0;
 	}
 
@@ -133,8 +159,17 @@ int kprobe_xfrm_inc_stats(struct pt_regs *ctx)
 		return 0;
 	}
 
+	__u32 tid = bpf_get_current_pid_tgid() & 0xffffffff;
+	struct sk_buff *skb = (struct sk_buff *)bpf_map_lookup_elem(&tid2skb, &tid);
+	if (!skb) {
+		bpf_printk("BUG: skb not found: %x\n", tid);
+		return 0;
+	}
+
 	struct event ev = {};
 	ev.pc = ctx->ip - 1;
+	ev.skb = (__u64)skb;
+	ev.mark = BPF_CORE_READ(skb, mark);
 	bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 	return 0;
 }

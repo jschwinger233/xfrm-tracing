@@ -20,7 +20,7 @@ spec:
         securityContext:
           privileged: true
         command: ["/usr/bin/xfrm-tracing"]
-        args: ["esp or (tcp and dst port 8000)"] # depends
+        args: ["ctx.yaml"] # depends
       volumes:
       - name: sys-kernel-debug
         hostPath:

@@ -40,6 +40,7 @@ struct event {
 	__u64 skb;
 	__u32 mark;
 	__u32 ifindex;
+	__u32 stack_id;
 	__u8 payload[256];
 };
 
@@ -49,6 +50,14 @@ struct bpf_map_def SEC("maps") tid2skb = {
 	.value_size = sizeof(struct sk_buff *),
 	.max_entries = 1<<16,
 };
+
+struct bpf_map_def SEC("maps") stacks = {
+	.type = BPF_MAP_TYPE_STACK_TRACE,
+	.key_size = sizeof(__u32),
+	.value_size = 50 * sizeof(__u64),
+	.max_entries = 1<<8,
+};
+
 
 static __always_inline void read_reg(struct pt_regs *ctx, __u8 reg_idx, __u64 *reg)
 {
@@ -164,6 +173,7 @@ int kprobe_xfrm_inc_stats(struct pt_regs *ctx)
 	ev.skb = (__u64)skb;
 	ev.mark = BPF_CORE_READ(*skb, mark);
 	ev.ifindex = BPF_CORE_READ(*skb, dev, ifindex);
+	ev.stack_id = bpf_get_stackid(ctx, &stacks, BPF_F_FAST_STACK_CMP);
 	void *skb_head = BPF_CORE_READ(*skb, head);
 	u16 l3_off = BPF_CORE_READ(*skb, network_header);
 	bpf_probe_read_kernel(&ev.payload, sizeof(ev.payload), (void *)(skb_head + l3_off));

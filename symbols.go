@@ -54,6 +54,9 @@ func NearestSymbol(addr uint64) Symbol {
 	if kallsyms[idx].Addr == addr {
 		return kallsyms[idx]
 	}
+	if idx == 0 {
+		return kallsyms[0]
+	}
 	return kallsyms[idx-1]
 }
 

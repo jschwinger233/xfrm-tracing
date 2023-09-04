@@ -17,7 +17,9 @@ type bpfEvent struct {
 	Skb     uint64
 	Mark    uint32
 	Ifindex uint32
+	StackId uint32
 	Payload [256]uint8
+	_       [4]byte
 }
 
 // loadBpf returns the embedded CollectionSpec for bpf.
@@ -74,6 +76,7 @@ type bpfMapSpecs struct {
 	Events     *ebpf.MapSpec `ebpf:"events"`
 	IncContext *ebpf.MapSpec `ebpf:"inc_context"`
 	PerfOutput *ebpf.MapSpec `ebpf:"perf_output"`
+	Stacks     *ebpf.MapSpec `ebpf:"stacks"`
 	Tid2skb    *ebpf.MapSpec `ebpf:"tid2skb"`
 }
 
@@ -99,6 +102,7 @@ type bpfMaps struct {
 	Events     *ebpf.Map `ebpf:"events"`
 	IncContext *ebpf.Map `ebpf:"inc_context"`
 	PerfOutput *ebpf.Map `ebpf:"perf_output"`
+	Stacks     *ebpf.Map `ebpf:"stacks"`
 	Tid2skb    *ebpf.Map `ebpf:"tid2skb"`
 }
 
@@ -107,6 +111,7 @@ func (m *bpfMaps) Close() error {
 		m.Events,
 		m.IncContext,
 		m.PerfOutput,
+		m.Stacks,
 		m.Tid2skb,
 	)
 }

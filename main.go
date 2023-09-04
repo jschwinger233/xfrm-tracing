@@ -119,6 +119,7 @@ func main() {
 	if err := yaml.Unmarshal(fileContent, &xfrmIncCtx); err != nil {
 		log.Fatalf("Failed to unmarshal yaml: %s\n", err)
 	}
+	attachCnt := 0
 	for _, xCtx := range xfrmIncCtx {
 		objs.IncContext.Put(xCtx.Address, idxOfPtRegs(xCtx.Register))
 		ksym, offset := addr2ksym(xCtx.Address)
@@ -129,8 +130,10 @@ func main() {
 		}
 		defer kp.Close()
 
+		attachCnt++
 		xfrmIncMap[xCtx.Address] = xCtx
 	}
+	fmt.Printf("Attached %d/%d kprobes\n", attachCnt, len(xfrmIncCtx))
 
 	// Attach ip_rcv
 	kp, err = link.Kprobe("ip_rcv", objs.KprobeIpRcv, nil)
@@ -186,6 +189,16 @@ func main() {
 			event.Mark,
 			event.Ifindex,
 			sprintfPacket(event.Payload[:]))
+
+		var stack [50]uint64
+		if err := objs.Stacks.Lookup(&event.StackId, &stack); err == nil {
+			for _, ip := range stack {
+				if ip > 0 {
+					ksym, off := addr2ksym(ip)
+					fmt.Printf("\t%s+%d\n", ksym, off)
+				}
+			}
+		}
 	}
 
 }
@@ -243,3 +256,13 @@ func addr2ksym(addr uint64) (ksym string, offset uint64) {
 	sym := NearestSymbol(addr)
 	return sym.Name, addr - sym.Addr
 }
+
+/*
+Todo:
+1. output ifname
+2. output pcap file
+3. output bt
+4. translate xfrm_stat_index to name
+5. monitor ip-xfrm and tc
+6. test on eks
+*/

@@ -44,10 +44,15 @@ struct event {
 	__u8 payload[256];
 };
 
-struct bpf_map_def SEC("maps") tid2skb = {
+struct inc_event {
+	__u64 pc;
+	__u32 stack_id;
+};
+
+struct bpf_map_def SEC("maps") tid2inc_event = {
 	.type = BPF_MAP_TYPE_HASH,
 	.key_size = sizeof(__u32),
-	.value_size = sizeof(struct sk_buff *),
+	.value_size = sizeof(struct inc_event),
 	.max_entries = 1<<16,
 };
 
@@ -128,20 +133,34 @@ static __always_inline void read_reg(struct pt_regs *ctx, __u8 reg_idx, __u64 *r
 	}
 }
 
-SEC("kprobe/ip_rcv")
-int kprobe_ip_rcv(struct pt_regs *ctx)
+SEC("kprobe/kfree_skbmem")
+int kprobe_kfree_skbmem(struct pt_regs *ctx)
 {
-	__u64 skb = (__u64)PT_REGS_PARM1(ctx);
+	struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
+
 	__u32 tid = bpf_get_current_pid_tgid() & 0xffffffff;
-	bpf_map_update_elem(&tid2skb, &tid, &skb, BPF_ANY);
+	struct inc_event *inc_ev = bpf_map_lookup_elem(&tid2inc_event, &tid);
+	if (!inc_ev)
+		return 0;
+
+	struct event ev = {};
+	ev.pc = inc_ev->pc;
+	ev.skb = (__u64)skb;
+	ev.mark = BPF_CORE_READ(skb, mark);
+	ev.ifindex = BPF_CORE_READ(skb, dev, ifindex);
+	ev.stack_id = inc_ev->stack_id;
+	void *skb_head = BPF_CORE_READ(skb, head);
+	u16 l3_off = BPF_CORE_READ(skb, network_header);
+	bpf_probe_read_kernel(&ev.payload, sizeof(ev.payload), (void *)(skb_head + l3_off));
+	bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
 	return 0;
 }
 
-SEC("kretprobe/ip_rcv")
-int kretprobe_ip_rcv(struct pt_regs *ctx)
+SEC("kretprobe/kfree_skbmem")
+int kretprobe_kfree_skbmem(struct pt_regs *ctx)
 {
 	__u32 tid = bpf_get_current_pid_tgid() & 0xffffffff;
-	bpf_map_delete_elem(&tid2skb, &tid);
+	bpf_map_delete_elem(&tid2inc_event, &tid);
 	return 0;
 }
 
@@ -161,23 +180,12 @@ int kprobe_xfrm_inc_stats(struct pt_regs *ctx)
 		return 0;
 	}
 
-	__u32 tid = bpf_get_current_pid_tgid() & 0xffffffff;
-	struct sk_buff **skb = (struct sk_buff **)bpf_map_lookup_elem(&tid2skb, &tid);
-	if (!skb) {
-		bpf_printk("BUG: skb not found: %x\n", tid);
-		return 0;
-	}
+	struct inc_event inc_ev = {};
+	inc_ev.pc = BPF_CORE_READ(ctx, ip) - 1;
+	inc_ev.stack_id = bpf_get_stackid(ctx, &stacks, BPF_F_FAST_STACK_CMP);
 
-	struct event ev = {};
-	ev.pc = ctx->ip - 1;
-	ev.skb = (__u64)skb;
-	ev.mark = BPF_CORE_READ(*skb, mark);
-	ev.ifindex = BPF_CORE_READ(*skb, dev, ifindex);
-	ev.stack_id = bpf_get_stackid(ctx, &stacks, BPF_F_FAST_STACK_CMP);
-	void *skb_head = BPF_CORE_READ(*skb, head);
-	u16 l3_off = BPF_CORE_READ(*skb, network_header);
-	bpf_probe_read_kernel(&ev.payload, sizeof(ev.payload), (void *)(skb_head + l3_off));
-	bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+	__u32 tid = bpf_get_current_pid_tgid() & 0xffffffff;
+	bpf_map_update_elem(&tid2inc_event, &tid, &inc_ev, BPF_ANY);
 	return 0;
 }
 

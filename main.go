@@ -150,15 +150,15 @@ func main() {
 	}
 	fmt.Printf("Attached %d/%d kprobes\n", attachCnt, len(xfrmIncCtx))
 
-	// Attach ip_rcv
-	kp, err = link.Kprobe("ip_rcv", objs.KprobeIpRcv, nil)
+	// Attach kfree_skbmem
+	kp, err = link.Kprobe("kfree_skbmem", objs.KprobeKfreeSkbmem, nil)
 	if err != nil {
-		log.Fatalf("Failed to attach kprobe to ip_rcv: %s\n", err)
+		log.Fatalf("Failed to attach kprobe to kfree_skbmem: %s\n", err)
 	}
 	defer kp.Close()
-	krp, err := link.Kretprobe("ip_rcv", objs.KretprobeIpRcv, nil)
+	krp, err := link.Kretprobe("kfree_skbmem", objs.KretprobeKfreeSkbmem, nil)
 	if err != nil {
-		log.Fatalf("Failed to attach kretprobe to ip_rcv: %s\n", err)
+		log.Fatalf("Failed to attach kretprobe to kfree_skbmem: %s\n", err)
 	}
 	defer krp.Close()
 

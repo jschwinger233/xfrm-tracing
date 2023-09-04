@@ -63,21 +63,21 @@ type bpfSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfProgramSpecs struct {
-	KprobeIpRcv                 *ebpf.ProgramSpec `ebpf:"kprobe_ip_rcv"`
+	KprobeKfreeSkbmem           *ebpf.ProgramSpec `ebpf:"kprobe_kfree_skbmem"`
 	KprobeXfrmIncStats          *ebpf.ProgramSpec `ebpf:"kprobe_xfrm_inc_stats"`
 	KprobeXfrmStatisticsSeqShow *ebpf.ProgramSpec `ebpf:"kprobe_xfrm_statistics_seq_show"`
-	KretprobeIpRcv              *ebpf.ProgramSpec `ebpf:"kretprobe_ip_rcv"`
+	KretprobeKfreeSkbmem        *ebpf.ProgramSpec `ebpf:"kretprobe_kfree_skbmem"`
 }
 
 // bpfMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
-	Events     *ebpf.MapSpec `ebpf:"events"`
-	IncContext *ebpf.MapSpec `ebpf:"inc_context"`
-	PerfOutput *ebpf.MapSpec `ebpf:"perf_output"`
-	Stacks     *ebpf.MapSpec `ebpf:"stacks"`
-	Tid2skb    *ebpf.MapSpec `ebpf:"tid2skb"`
+	Events       *ebpf.MapSpec `ebpf:"events"`
+	IncContext   *ebpf.MapSpec `ebpf:"inc_context"`
+	PerfOutput   *ebpf.MapSpec `ebpf:"perf_output"`
+	Stacks       *ebpf.MapSpec `ebpf:"stacks"`
+	Tid2incEvent *ebpf.MapSpec `ebpf:"tid2inc_event"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -99,11 +99,11 @@ func (o *bpfObjects) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
-	Events     *ebpf.Map `ebpf:"events"`
-	IncContext *ebpf.Map `ebpf:"inc_context"`
-	PerfOutput *ebpf.Map `ebpf:"perf_output"`
-	Stacks     *ebpf.Map `ebpf:"stacks"`
-	Tid2skb    *ebpf.Map `ebpf:"tid2skb"`
+	Events       *ebpf.Map `ebpf:"events"`
+	IncContext   *ebpf.Map `ebpf:"inc_context"`
+	PerfOutput   *ebpf.Map `ebpf:"perf_output"`
+	Stacks       *ebpf.Map `ebpf:"stacks"`
+	Tid2incEvent *ebpf.Map `ebpf:"tid2inc_event"`
 }
 
 func (m *bpfMaps) Close() error {
@@ -112,7 +112,7 @@ func (m *bpfMaps) Close() error {
 		m.IncContext,
 		m.PerfOutput,
 		m.Stacks,
-		m.Tid2skb,
+		m.Tid2incEvent,
 	)
 }
 
@@ -120,18 +120,18 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfPrograms struct {
-	KprobeIpRcv                 *ebpf.Program `ebpf:"kprobe_ip_rcv"`
+	KprobeKfreeSkbmem           *ebpf.Program `ebpf:"kprobe_kfree_skbmem"`
 	KprobeXfrmIncStats          *ebpf.Program `ebpf:"kprobe_xfrm_inc_stats"`
 	KprobeXfrmStatisticsSeqShow *ebpf.Program `ebpf:"kprobe_xfrm_statistics_seq_show"`
-	KretprobeIpRcv              *ebpf.Program `ebpf:"kretprobe_ip_rcv"`
+	KretprobeKfreeSkbmem        *ebpf.Program `ebpf:"kretprobe_kfree_skbmem"`
 }
 
 func (p *bpfPrograms) Close() error {
 	return _BpfClose(
-		p.KprobeIpRcv,
+		p.KprobeKfreeSkbmem,
 		p.KprobeXfrmIncStats,
 		p.KprobeXfrmStatisticsSeqShow,
-		p.KretprobeIpRcv,
+		p.KretprobeKfreeSkbmem,
 	)
 }
 

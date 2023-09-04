@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -219,7 +220,8 @@ func main() {
 		} else {
 			ifname = iface.Name
 		}
-		fmt.Printf("%s++: mark=%d if=%d(%s) %s\n",
+		fmt.Printf("%s\t%s++: mark=0x%x if=%d(%s) %s\n",
+			time.Now().String(),
 			XfrmStatNames[xCtx.XfrmStatIndex],
 			event.Mark,
 			event.Ifindex, ifname,
@@ -295,10 +297,5 @@ func addr2ksym(addr uint64) (ksym string, offset uint64) {
 
 /*
 Todo:
-1. output ifname
-2. output pcap file
-3. output bt
-4. translate xfrm_stat_index to name
-5. monitor ip-xfrm and tc
-6. test on eks
+1. output pcap file
 */

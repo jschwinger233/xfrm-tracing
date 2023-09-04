@@ -125,6 +125,17 @@ func main() {
 
 	}
 
+	// Generate if need
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	if _, err := os.Stat(os.Args[1]); errors.Is(err, os.ErrNotExist) {
+		fmt.Printf("Dumping xfrm_inc contexts to %s\n", os.Args[1])
+		if err := dumpXfrmIncContexts(ctx, os.Args[1]); err != nil {
+			log.Fatalf("Failed to dump xfrm_inc contexts: %s\n", err)
+		}
+	}
+
 	// Attach kprobes
 	fileContent, err := ioutil.ReadFile(os.Args[1])
 	if err != nil {
@@ -164,9 +175,6 @@ func main() {
 	defer krp.Close()
 
 	println("tracing...")
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
 
 	wg := &sync.WaitGroup{}
 	wg.Add(2)

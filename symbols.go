@@ -11,6 +11,7 @@ import (
 )
 
 type Symbol struct {
+	Type string
 	Name string
 	Addr uint64
 }
@@ -36,9 +37,9 @@ func readKallsyms() {
 		if err != nil {
 			continue
 		}
-		name := parts[2]
-		kallsyms = append(kallsyms, Symbol{name, addr})
-		kallsymsByName[name] = Symbol{name, addr}
+		typ, name := parts[1], parts[2]
+		kallsyms = append(kallsyms, Symbol{typ, name, addr})
+		kallsymsByName[name] = Symbol{typ, name, addr}
 	}
 	sort.Slice(kallsyms, func(i, j int) bool {
 		return kallsyms[i].Addr < kallsyms[j].Addr
@@ -62,4 +63,23 @@ func NearestSymbol(addr uint64) Symbol {
 
 func Kaddr(sym string) uint64 {
 	return kallsymsByName[sym].Addr
+}
+
+func FirstKsym() (sym Symbol) {
+	for _, sym = range kallsyms {
+		if sym.Type == "t" {
+			return
+		}
+	}
+	return
+}
+
+func LastKsym() (sym Symbol) {
+	for i := len(kallsyms) - 1; i >= 0; i-- {
+		sym = kallsyms[i]
+		if sym.Type == "t" {
+			return
+		}
+	}
+	return
 }

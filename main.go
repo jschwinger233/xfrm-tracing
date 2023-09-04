@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -198,10 +199,17 @@ func main() {
 		if !ok {
 			log.Printf("Failed to find xfrm_inc_stats context for address: %x\n", event.Pc)
 		}
-		fmt.Printf("%s++: mark=%d if=%d %s\n",
+		ifname := "unknown"
+		iface, err := net.InterfaceByIndex(int(event.Ifindex))
+		if err != nil {
+			fmt.Printf("failed to convert ifindex to ifname: %+v\n", err)
+		} else {
+			ifname = iface.Name
+		}
+		fmt.Printf("%s++: mark=%d if=%d(%s) %s\n",
 			XfrmStatNames[xCtx.XfrmStatIndex],
 			event.Mark,
-			event.Ifindex,
+			event.Ifindex, ifname,
 			sprintfPacket(event.Payload[:]))
 
 		var stack [50]uint64

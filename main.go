@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -10,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/cilium/ebpf"
@@ -22,8 +24,7 @@ import (
 var (
 	pcapFilter string
 
-	pwruBuf     = make(map[string][]string)
-	skbConsumed = make(map[string]bool)
+	XfrmStatNames = make(map[uint8]string)
 )
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -no-strip -target native -type event bpf bpf.c -- -I./headers
@@ -66,7 +67,20 @@ func main() {
 	triggerXfrmStatisticsSeqShow := make(chan struct{})
 	go func() {
 		<-triggerXfrmStatisticsSeqShow
-		ioutil.ReadFile("/proc/net/xfrm_stat")
+		content, err := ioutil.ReadFile("/proc/net/xfrm_stat")
+		if err != nil {
+			log.Fatalf("Failed to read /proc/net/xfrm_stat: %s\n", err)
+		}
+		scanner := bufio.NewScanner(bytes.NewReader(content))
+		idx := uint8(0)
+		for scanner.Scan() {
+			parts := strings.Fields(scanner.Text())
+			if len(parts) != 2 {
+				continue
+			}
+			idx++
+			XfrmStatNames[idx] = parts[0]
+		}
 	}()
 	perfReader, err := perf.NewReader(objs.PerfOutput, 4096)
 	if err != nil {
@@ -184,8 +198,8 @@ func main() {
 		if !ok {
 			log.Printf("Failed to find xfrm_inc_stats context for address: %x\n", event.Pc)
 		}
-		fmt.Printf("xfrm_inc_stats[%d]++: mark=%d if=%d %s\n",
-			xCtx.XfrmStatIndex,
+		fmt.Printf("%s++: mark=%d if=%d %s\n",
+			XfrmStatNames[xCtx.XfrmStatIndex],
 			event.Mark,
 			event.Ifindex,
 			sprintfPacket(event.Payload[:]))

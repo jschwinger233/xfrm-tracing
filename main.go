@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/cilium/ebpf"
@@ -162,11 +163,15 @@ func main() {
 	}
 	defer krp.Close()
 
-	// Poll ringbuf events
+	println("tracing...")
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	println("tracing...")
+	wg := &sync.WaitGroup{}
+	wg.Add(2)
+	go monitorTc(ctx, wg)
+	go monitorIpX(ctx, wg)
 
 	eventsReader, err := ringbuf.NewReader(objs.Events)
 	if err != nil {
@@ -223,6 +228,7 @@ func main() {
 		}
 	}
 
+	wg.Wait()
 }
 
 func idxOfPtRegs(reg string) uint8 {

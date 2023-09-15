@@ -149,7 +149,12 @@ func main() {
 	}
 	attachCnt := 0
 	for _, xCtx := range xfrmIncCtx {
-		objs.IncContext.Put(xCtx.Address, idxOfPtRegs(xCtx.Register))
+		regIdx, err := idxOfPtRegs(xCtx.Register)
+		if err != nil {
+			fmt.Printf("Skip %+v: %+v\n", xCtx, err)
+			continue
+		}
+		objs.IncContext.Put(xCtx.Address, regIdx)
 		ksym, offset := addr2ksym(xCtx.Address)
 		kp, err := link.Kprobe(ksym, objs.KprobeXfrmIncStats, &link.KprobeOptions{Offset: offset})
 		if err != nil {
@@ -241,53 +246,52 @@ func main() {
 	wg.Wait()
 }
 
-func idxOfPtRegs(reg string) uint8 {
+func idxOfPtRegs(reg string) (uint8, error) {
 	switch reg {
 	case "r15":
-		return 0
+		return 0, nil
 	case "r14":
-		return 1
+		return 1, nil
 	case "r13":
-		return 2
+		return 2, nil
 	case "r12":
-		return 3
+		return 3, nil
 	case "rbp":
-		return 4
+		return 4, nil
 	case "rbx":
-		return 5
+		return 5, nil
 	case "r11":
-		return 6
+		return 6, nil
 	case "r10":
-		return 7
+		return 7, nil
 	case "r9":
-		return 8
+		return 8, nil
 	case "r8":
-		return 9
+		return 9, nil
 	case "rax":
-		return 10
+		return 10, nil
 	case "rcx":
-		return 11
+		return 11, nil
 	case "rdx":
-		return 12
+		return 12, nil
 	case "rsi":
-		return 13
+		return 13, nil
 	case "rdi":
-		return 14
+		return 14, nil
 	case "orig_rax":
-		return 15
+		return 15, nil
 	case "rip":
-		return 16
+		return 16, nil
 	case "cs":
-		return 17
+		return 17, nil
 	case "eflags":
-		return 18
+		return 18, nil
 	case "rsp":
-		return 19
+		return 19, nil
 	case "ss":
-		return 20
+		return 20, nil
 	}
-	log.Fatalf("Unknown register: %s\n", reg)
-	return 0
+	return 0, fmt.Errorf("Unknown register: %s", reg)
 }
 
 func addr2ksym(addr uint64) (ksym string, offset uint64) {

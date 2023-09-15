@@ -20,7 +20,7 @@ spec:
         securityContext:
           privileged: true
         command: ["/usr/bin/xfrm-tracing"]
-        args: ["ctx.yaml"] # depends
+        args: ["ctx.yaml"]
       volumes:
       - name: sys-kernel-debug
         hostPath:

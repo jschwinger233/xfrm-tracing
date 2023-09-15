@@ -1,14 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"context"
+	"debug/elf"
 	"fmt"
-	"log"
 	"os"
-	"os/exec"
 	"regexp"
-	"strconv"
+	"strings"
+
+	"golang.org/x/arch/x86/x86asm"
 )
 
 var Pat *regexp.Regexp
@@ -24,17 +24,34 @@ func init() {
 }
 
 func dumpXfrmIncContexts(ctx context.Context, filename string) (err error) {
-	start, last := FirstKsym().Addr, LastKsym().Addr
-	gdbcmd := fmt.Sprintf("x/%di %d", last-start, start)
-	command := exec.CommandContext(ctx, "gdb", "-ex", gdbcmd, "-ex", "q", "/proc/kcore", "/proc/kcore")
-	stdout, err := command.StdoutPipe()
+	bin, err := os.Open("/proc/kcore")
 	if err != nil {
 		return
 	}
-	if err = command.Start(); err != nil {
+	defer bin.Close()
+	elfFile, err := elf.NewFile(bin)
+	if err != nil {
 		return
 	}
-	defer command.Wait()
+	ranges := map[*elf.Prog][2]uint64{}
+	for _, ksym := range kallsyms {
+		if ksym.Type != "t" {
+			continue
+		}
+		for _, prog := range elfFile.Progs {
+			if prog.Vaddr <= ksym.Addr && prog.Vaddr+prog.Memsz >= ksym.Addr {
+				r, ok := ranges[prog]
+				if !ok {
+					ranges[prog] = [2]uint64{ksym.Addr, ksym.Addr + 10000}
+				} else if r[0] > ksym.Addr {
+					ranges[prog] = [2]uint64{ksym.Addr, r[1]}
+				} else if r[1] < ksym.Addr+10000 {
+					ranges[prog] = [2]uint64{r[0], ksym.Addr + 10000}
+				}
+				break
+			}
+		}
+	}
 
 	file, err := os.Create(filename)
 	if err != nil {
@@ -42,27 +59,34 @@ func dumpXfrmIncContexts(ctx context.Context, filename string) (err error) {
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		matches := Pat.FindStringSubmatch(scanner.Text())
-		if len(matches) == 0 {
-			continue
+	for prog, r := range ranges {
+		bytes := make([]byte, r[1]-r[0])
+		if _, err = bin.ReadAt(bytes, int64(prog.Off+r[0]-prog.Vaddr)); err != nil {
+			return
 		}
-		address := matches[Pat.SubexpIndex("address")]
-		offset := matches[Pat.SubexpIndex("offset")]
-		reg := matches[Pat.SubexpIndex("reg")]
-		addr, err := strconv.ParseUint(address, 16, 64)
-		if err != nil {
-			log.Fatalf("Failed to parse address %s: %v", address, err)
+		offset := uint64(0)
+		for {
+			inst, err := x86asm.Decode(bytes, 64)
+			if err != nil {
+				inst = x86asm.Inst{Len: 1}
+			}
+
+			if x86asm.Prefix(bytes[0]) == x86asm.PrefixGS && inst.Op == x86asm.INC {
+				mem, ok := inst.Args[0].(x86asm.Mem)
+				if ok && mem.Disp/8*8 == mem.Disp && mem.Disp > 0 && mem.Disp <= 28*8 {
+					addr := r[0] + offset
+					reg := strings.ToLower(mem.Base.String())
+					fmt.Fprintf(file, Tmpl, addr, addr, reg, mem.Disp/8, mem.Disp)
+				}
+			}
+			bytes = bytes[inst.Len:]
+			offset += uint64(inst.Len)
+			if len(bytes) == 0 {
+				break
+			}
 		}
-		off, err := strconv.ParseUint(offset, 16, 64)
-		if err != nil {
-			log.Fatalf("Failed to parse offset %s: %v", offset, err)
-		}
-		if off/8*8 != off || off > 28*8 {
-			continue
-		}
-		fmt.Fprintf(file, Tmpl, addr, addr, reg, off/8, off)
+
 	}
-	return scanner.Err()
+
+	return
 }

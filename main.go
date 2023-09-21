@@ -225,9 +225,10 @@ func main() {
 		} else {
 			ifname = iface.Name
 		}
-		fmt.Printf("%s\t%s++: mark=0x%x if=%d(%s) %s\n",
+		fmt.Printf("%s\t%s++: skb=%x mark=0x%x if=%d(%s) %s\n",
 			time.Now().String(),
 			XfrmStatNames[xCtx.XfrmStatIndex],
+			event.Skb,
 			event.Mark,
 			event.Ifindex, ifname,
 			sprintfPacket(event.Payload[:]))

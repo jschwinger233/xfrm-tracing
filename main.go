@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
 	"github.com/cilium/ebpf/ringbuf"
@@ -29,6 +29,8 @@ var (
 
 	XfrmStatNames = make(map[uint8]string)
 )
+
+const absoluteTS string = "15:04:05.000"
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -no-strip -target native -type event bpf bpf.c -- -I./headers
 
@@ -166,7 +168,7 @@ func main() {
 		attachCnt++
 		xfrmIncMap[xCtx.Address] = xCtx
 	}
-	fmt.Printf("Attached %d/%d kprobes\n", attachCnt, len(xfrmIncCtx))
+	fmt.Printf("Attached %d/%d xfrm kprobes\n", attachCnt, len(xfrmIncCtx))
 
 	// Attach kfree_skbmem
 	kp, err = link.Kprobe("kfree_skbmem", objs.KprobeKfreeSkbmem, nil)
@@ -179,6 +181,38 @@ func main() {
 		log.Fatalf("Failed to attach kretprobe to kfree_skbmem: %s\n", err)
 	}
 	defer krp.Close()
+
+	btfSpec, err := btf.LoadKernelSpec()
+	if err != nil {
+		log.Fatalf("Failed to load BTF spec: %s", err)
+	}
+	funcs, err := GetFuncs(btfSpec)
+	if err != nil {
+		log.Fatalf("Failed to get skb-accepting functions: %s", err)
+	}
+	delete(funcs, "kfree_skbmem")
+
+	for fn, pos := range funcs {
+		var kp link.Link
+		switch pos {
+		case 1:
+			kp, err = link.Kprobe(fn, objs.KprobeSkb1, nil)
+		case 2:
+			kp, err = link.Kprobe(fn, objs.KprobeSkb2, nil)
+		case 3:
+			kp, err = link.Kprobe(fn, objs.KprobeSkb3, nil)
+		case 4:
+			kp, err = link.Kprobe(fn, objs.KprobeSkb4, nil)
+		case 5:
+			kp, err = link.Kprobe(fn, objs.KprobeSkb5, nil)
+		}
+		if err != nil {
+			log.Printf("Failed to attach kprobe to %s: %+v\n", fn, err)
+			continue
+		}
+		defer kp.Close()
+	}
+	fmt.Printf("Attached %d skb-accepting functions\n", len(funcs))
 
 	println("tracing...")
 
@@ -198,6 +232,7 @@ func main() {
 		eventsReader.Close()
 	}()
 
+	events := map[uint64][]bpfEvent{}
 	for {
 		rec, err := eventsReader.Read()
 		if err != nil {
@@ -214,93 +249,51 @@ func main() {
 			continue
 		}
 
-		xCtx, ok := xfrmIncMap[event.Pc]
-		if !ok {
-			log.Printf("Failed to find xfrm_inc_stats context for address: %x\n", event.Pc)
-		}
-		ifname := "unknown"
-		iface, err := net.InterfaceByIndex(int(event.Ifindex))
-		if err != nil {
-			fmt.Printf("failed to convert ifindex to ifname: %+v\n", err)
-		} else {
-			ifname = iface.Name
-		}
-		fmt.Printf("%s\t%s++: skb=%x mark=0x%x if=%d(%s) %s\n",
-			time.Now().String(),
-			XfrmStatNames[xCtx.XfrmStatIndex],
-			event.Skb,
-			event.Mark,
-			event.Ifindex, ifname,
-			sprintfPacket(event.Payload[:]))
+		if event.XfrmIncStackId != 0 {
+			for _, ev := range events[event.Skb] {
+				fmt.Printf("%s %x %24s mark=0x%x if=%d(%s) proto=0x%x netns=%d len=%d %s\n",
+					time.Now().Format(absoluteTS),
+					ev.Skb,
+					Ksym(ev.Pc),
+					ev.Mark,
+					ev.Ifindex, ifname(ev.Ifindex),
+					ev.Protocol,
+					ev.Netns,
+					ev.Len,
+					sprintfPacket(ev.Payload[:]))
+			}
 
-		var stack [50]uint64
-		if err := objs.Stacks.Lookup(&event.StackId, &stack); err == nil {
-			for _, ip := range stack {
-				if ip > 0 {
-					ksym, off := addr2ksym(ip)
-					fmt.Printf("\t%s+%d\n", ksym, off)
+			xCtx, ok := xfrmIncMap[event.Pc]
+			if !ok {
+				log.Printf("Failed to find xfrm_inc_stats context for address: %x\n", event.Pc)
+			}
+			fmt.Printf("%s %x %24s mark=0x%x if=%d(%s) proto=0x%x netns=%d len=%d %s\n",
+				time.Now().Format(absoluteTS),
+				event.Skb,
+				"++"+XfrmStatNames[xCtx.XfrmStatIndex],
+				event.Mark,
+				event.Ifindex, ifname(event.Ifindex),
+				event.Protocol,
+				event.Netns,
+				event.Len,
+				sprintfPacket(event.Payload[:]))
+
+			var stack [50]uint64
+			if err := objs.Stacks.Lookup(&event.XfrmIncStackId, &stack); err == nil {
+				for _, ip := range stack {
+					if ip > 0 {
+						ksym, off := addr2ksym(ip)
+						fmt.Printf("\t%s+%d\n", ksym, off)
+					}
 				}
 			}
+			delete(events, event.Skb)
+		} else if Ksym(event.Pc) == "kfree_skbmem" {
+			delete(events, event.Skb)
+		} else {
+			events[event.Skb] = append(events[event.Skb], event)
 		}
 	}
 
 	wg.Wait()
 }
-
-func idxOfPtRegs(reg string) (uint8, error) {
-	switch reg {
-	case "r15":
-		return 0, nil
-	case "r14":
-		return 1, nil
-	case "r13":
-		return 2, nil
-	case "r12":
-		return 3, nil
-	case "rbp":
-		return 4, nil
-	case "rbx":
-		return 5, nil
-	case "r11":
-		return 6, nil
-	case "r10":
-		return 7, nil
-	case "r9":
-		return 8, nil
-	case "r8":
-		return 9, nil
-	case "rax":
-		return 10, nil
-	case "rcx":
-		return 11, nil
-	case "rdx":
-		return 12, nil
-	case "rsi":
-		return 13, nil
-	case "rdi":
-		return 14, nil
-	case "orig_rax":
-		return 15, nil
-	case "rip":
-		return 16, nil
-	case "cs":
-		return 17, nil
-	case "eflags":
-		return 18, nil
-	case "rsp":
-		return 19, nil
-	case "ss":
-		return 20, nil
-	}
-	return 0, fmt.Errorf("Unknown register: %s", reg)
-}
-
-func addr2ksym(addr uint64) (ksym string, offset uint64) {
-	sym := NearestSymbol(addr)
-	return sym.Name, addr - sym.Addr
-}
-
-/*
-Todo:
-1. output pcap file
-*/

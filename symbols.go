@@ -18,6 +18,7 @@ type Symbol struct {
 
 var kallsyms []Symbol
 var kallsymsByName map[string]Symbol = make(map[string]Symbol)
+var kallsymsByAddr map[uint64]Symbol = make(map[uint64]Symbol)
 
 func init() {
 	readKallsyms()
@@ -40,6 +41,7 @@ func readKallsyms() {
 		typ, name := parts[1], parts[2]
 		kallsyms = append(kallsyms, Symbol{typ, name, addr})
 		kallsymsByName[name] = Symbol{typ, name, addr}
+		kallsymsByAddr[addr] = Symbol{typ, name, addr}
 	}
 	sort.Slice(kallsyms, func(i, j int) bool {
 		return kallsyms[i].Addr < kallsyms[j].Addr
@@ -66,6 +68,10 @@ func NearestSymbol(addr uint64) Symbol {
 
 func Kaddr(sym string) uint64 {
 	return kallsymsByName[sym].Addr
+}
+
+func Ksym(addr uint64) string {
+	return kallsymsByAddr[addr].Name
 }
 
 func FirstKsym() (sym Symbol) {

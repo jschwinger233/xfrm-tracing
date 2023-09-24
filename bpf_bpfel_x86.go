@@ -13,13 +13,16 @@ import (
 )
 
 type bpfEvent struct {
-	Pc      uint64
-	Skb     uint64
-	Mark    uint32
-	Ifindex uint32
-	StackId uint32
-	Payload [256]uint8
-	_       [4]byte
+	Pc             uint64
+	Skb            uint64
+	Len            uint32
+	Mark           uint32
+	Netns          uint32
+	Ifindex        uint32
+	Protocol       uint16
+	Payload        [64]uint8
+	_              [2]byte
+	XfrmIncStackId uint32
 }
 
 // loadBpf returns the embedded CollectionSpec for bpf.
@@ -64,6 +67,11 @@ type bpfSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfProgramSpecs struct {
 	KprobeKfreeSkbmem           *ebpf.ProgramSpec `ebpf:"kprobe_kfree_skbmem"`
+	KprobeSkb1                  *ebpf.ProgramSpec `ebpf:"kprobe_skb_1"`
+	KprobeSkb2                  *ebpf.ProgramSpec `ebpf:"kprobe_skb_2"`
+	KprobeSkb3                  *ebpf.ProgramSpec `ebpf:"kprobe_skb_3"`
+	KprobeSkb4                  *ebpf.ProgramSpec `ebpf:"kprobe_skb_4"`
+	KprobeSkb5                  *ebpf.ProgramSpec `ebpf:"kprobe_skb_5"`
 	KprobeXfrmIncStats          *ebpf.ProgramSpec `ebpf:"kprobe_xfrm_inc_stats"`
 	KprobeXfrmStatisticsSeqShow *ebpf.ProgramSpec `ebpf:"kprobe_xfrm_statistics_seq_show"`
 	KretprobeKfreeSkbmem        *ebpf.ProgramSpec `ebpf:"kretprobe_kfree_skbmem"`
@@ -121,6 +129,11 @@ func (m *bpfMaps) Close() error {
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfPrograms struct {
 	KprobeKfreeSkbmem           *ebpf.Program `ebpf:"kprobe_kfree_skbmem"`
+	KprobeSkb1                  *ebpf.Program `ebpf:"kprobe_skb_1"`
+	KprobeSkb2                  *ebpf.Program `ebpf:"kprobe_skb_2"`
+	KprobeSkb3                  *ebpf.Program `ebpf:"kprobe_skb_3"`
+	KprobeSkb4                  *ebpf.Program `ebpf:"kprobe_skb_4"`
+	KprobeSkb5                  *ebpf.Program `ebpf:"kprobe_skb_5"`
 	KprobeXfrmIncStats          *ebpf.Program `ebpf:"kprobe_xfrm_inc_stats"`
 	KprobeXfrmStatisticsSeqShow *ebpf.Program `ebpf:"kprobe_xfrm_statistics_seq_show"`
 	KretprobeKfreeSkbmem        *ebpf.Program `ebpf:"kretprobe_kfree_skbmem"`
@@ -129,6 +142,11 @@ type bpfPrograms struct {
 func (p *bpfPrograms) Close() error {
 	return _BpfClose(
 		p.KprobeKfreeSkbmem,
+		p.KprobeSkb1,
+		p.KprobeSkb2,
+		p.KprobeSkb3,
+		p.KprobeSkb4,
+		p.KprobeSkb5,
 		p.KprobeXfrmIncStats,
 		p.KprobeXfrmStatisticsSeqShow,
 		p.KretprobeKfreeSkbmem,

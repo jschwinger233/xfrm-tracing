@@ -37,6 +37,7 @@ struct bpf_map_def SEC("maps") events = {
 
 struct event {
 	__u64 pc;
+	__u64 ts;
 	__u64 skb;
 	__u32 len;
 	__u32 mark;
@@ -169,6 +170,7 @@ int kprobe_kfree_skbmem(struct pt_regs *ctx)
 	}
 
 	ev.pc = inc_ev->pc;
+	ev.ts = bpf_ktime_get_boot_ns();
 	ev.len = BPF_CORE_READ(skb, len);
 	ev.mark = BPF_CORE_READ(skb, mark);
 	ev.netns = get_netns(skb);
@@ -231,6 +233,7 @@ static __always_inline int
 handle_everything(struct sk_buff *skb, struct pt_regs *ctx) {
 	struct event ev = {};
 	ev.pc = BPF_CORE_READ(ctx, ip)-1;
+	ev.ts = bpf_ktime_get_boot_ns();
 	ev.skb = (__u64)skb;
 	ev.len = BPF_CORE_READ(skb, len);
 	ev.mark = BPF_CORE_READ(skb, mark);

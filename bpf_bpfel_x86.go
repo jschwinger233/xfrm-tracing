@@ -14,6 +14,7 @@ import (
 
 type bpfEvent struct {
 	Pc             uint64
+	Ts             uint64
 	Skb            uint64
 	Len            uint32
 	Mark           uint32

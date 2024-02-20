@@ -21,6 +21,7 @@ import (
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
 	"github.com/cilium/ebpf/ringbuf"
+	"github.com/elastic/go-sysinfo"
 	"gopkg.in/yaml.v2"
 )
 
@@ -232,6 +233,13 @@ func main() {
 		eventsReader.Close()
 	}()
 
+	host, err := sysinfo.Host()
+	if err != nil {
+		log.Fatalf("Failed to get host info: %s", err)
+		return
+	}
+	bootTime := host.Info().BootTime
+
 	events := map[uint64][]bpfEvent{}
 	for {
 		rec, err := eventsReader.Read()
@@ -252,7 +260,7 @@ func main() {
 		if event.XfrmIncStackId != 0 {
 			for _, ev := range events[event.Skb] {
 				fmt.Printf("%s %x %24s mark=0x%x if=%d(%s) proto=0x%x netns=%d len=%d %s\n",
-					time.Now().Format(absoluteTS),
+					bootTime.Add(time.Duration(ev.Ts)).Format(absoluteTS),
 					ev.Skb,
 					Ksym(ev.Pc),
 					ev.Mark,
@@ -268,7 +276,7 @@ func main() {
 				log.Printf("Failed to find xfrm_inc_stats context for address: %x\n", event.Pc)
 			}
 			fmt.Printf("%s %x %24s mark=0x%x if=%d(%s) proto=0x%x netns=%d len=%d %s\n",
-				time.Now().Format(absoluteTS),
+				bootTime.Add(time.Duration(event.Ts)).Format(absoluteTS),
 				event.Skb,
 				"++"+XfrmStatNames[xCtx.XfrmStatIndex],
 				event.Mark,
